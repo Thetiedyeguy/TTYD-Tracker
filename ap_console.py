@@ -186,7 +186,8 @@ async def _main_async(args) -> None:
 
 
 async def run(host, port, slot, game, password):
-    uri = f"ws://{host}:{port}"
+    secure = host not in ("localhost", "127.0.0.1")
+    uri = f"{'wss' if secure else 'ws'}://{host}:{port}"
     print(f"[{ts()}] Connecting to {uri} ...")
 
     item_id_to_name = {}
