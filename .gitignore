@@ -1,0 +1,4 @@
+build/
+dist/
+build.bat
+TTYD_Tracker.spec

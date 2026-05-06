@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TTYD Region Tracker</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d1117;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ── Status / counters ─────────────────────────────── */
+    #status {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      z-index: 25;
+      letter-spacing: 0.03em;
+    }
+    .status-connected    { background: #0d2b1a; color: #4ade80; border: 1px solid #166534; }
+    .status-disconnected { background: #2a0a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+
+    #counters {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      font-size: 11px;
+      color: #4a5568;
+      z-index: 25;
+      line-height: 1.7;
+    }
+
+    #color-toggle {
+      position: fixed;
+      top: 46px;
+      left: 12px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: #4a5568;
+      z-index: 25;
+      cursor: pointer;
+      user-select: none;
+    }
+    #color-toggle input { cursor: pointer; accent-color: #3b82f6; }
+
+    /* ── Graph ─────────────────────────────────────────── */
+    svg { width: 100vw; height: 100vh; display: block; }
+
+    .link { stroke: #1e3a5f; stroke-width: 2px; fill: none; }
+
+    .node-circle {
+      fill: #0f1e33;
+      stroke: #2563eb;
+      stroke-width: 2px;
+      cursor: grab;
+      transition: fill 0.25s;
+    }
+    .node-circle:hover { fill: #162844; stroke: #60a5fa; }
+    .node-circle.status-accessible   { fill: #052e16; stroke: #22c55e; }
+    .node-circle.status-inaccessible { fill: #2a0a0a; stroke: #ef4444; }
+    .node-circle.status-complete     { fill: #0f1621; stroke: #374151; }
+    .node-circle.current {
+      fill: #1c1400;
+      stroke: #f59e0b;
+      stroke-width: 3px;
+      filter: drop-shadow(0 0 6px #f59e0b88);
+    }
+
+    .node-label {
+      fill: #94a3b8;
+      font-size: 10.5px;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none;
+      user-select: none;
+    }
+    .node-label.current { fill: #fcd34d; }
+
+    #tooltip {
+      position: fixed;
+      background: #1e293b;
+      color: #cbd5e1;
+      padding: 5px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      pointer-events: none;
+      opacity: 0;
+      border: 1px solid #334155;
+      transition: opacity 0.15s;
+      z-index: 30;
+      white-space: nowrap;
+    }
+
+    #empty-msg {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: #2d3748;
+      font-size: 15px;
+      pointer-events: none;
+      z-index: 5;
+    }
+    #empty-msg span { display: block; font-size: 11px; margin-top: 6px; color: #1f2937; }
+
+    /* ── Sidebar ───────────────────────────────────────── */
+    #sidebar {
+      position: fixed;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 272px;
+      background: #0b1422;
+      border-left: 1px solid #1a2d42;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.28s ease;
+    }
+    #sidebar.visible { transform: translateX(0); }
+
+    .sb-header {
+      padding: 14px 16px 11px;
+      border-bottom: 1px solid #1a2d42;
+      flex-shrink: 0;
+    }
+    .sb-region-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sb-subtitle {
+      font-size: 10px;
+      color: #374151;
+      margin-top: 2px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .sb-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0 12px;
+      scrollbar-width: thin;
+      scrollbar-color: #1e3a5f transparent;
+    }
+    .sb-body::-webkit-scrollbar { width: 4px; }
+    .sb-body::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 2px; }
+
+    .sb-section {
+      font-size: 9.5px;
+      font-weight: 700;
+      color: #374151;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 10px 16px 4px;
+    }
+
+    .sb-item { font-size: 11.5px; line-height: 1.4; }
+    .sb-item-header span { color: #94a3b8; }
+    .sb-item.reachable .sb-item-header span { color: #d1fae5; }
+    .sb-item.checked .sb-item-header span,
+    .sb-item.visited  .sb-item-header span { color: #374151; }
+
+    .sb-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-green { background: #22c55e; }
+    .dot-red   { background: #ef4444; }
+    .dot-gray  { background: #374151; }
+
+    .sb-empty {
+      padding: 8px 16px;
+      font-size: 11px;
+      color: #1f2937;
+      font-style: italic;
+    }
+
+    .sb-item { cursor: pointer; }
+    .sb-item-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 16px;
+    }
+    .sb-item-header span { flex: 1; }
+    .sb-chevron {
+      font-size: 9px;
+      color: #374151;
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    .sb-item.expanded .sb-chevron { transform: rotate(180deg); }
+
+    .sb-explain {
+      display: none;
+      padding: 3px 16px 6px 31px;
+      font-size: 10.5px;
+      line-height: 1.6;
+      color: #4b5563;
+      word-break: break-word;
+    }
+    .sb-item.expanded .sb-explain { display: block; }
+
+    /* ── Sidebar toggle tab ────────────────────────────────── */
+    #sidebar-toggle {
+      position: absolute;
+      left: -22px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 22px;
+      height: 56px;
+      background: #0b1422;
+      border: 1px solid #1a2d42;
+      border-right: none;
+      border-radius: 6px 0 0 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #4a5568;
+      font-size: 11px;
+      user-select: none;
+      transition: color 0.2s, background 0.2s;
+      z-index: 21;
+    }
+    #sidebar-toggle:hover { background: #162844; color: #94a3b8; }
+
+
+    /* ── Path highlighting ─────────────────────────────────── */
+    .link.path-highlight { stroke: #a855f7 !important; stroke-width: 4px; }
+    .node-circle.path-highlight { stroke: #a855f7 !important; stroke-width: 3px !important; }
+    .node-circle.path-target    {
+      stroke: #fbbf24 !important;
+      stroke-width: 4px !important;
+      filter: drop-shadow(0 0 10px #fbbf2499) !important;
+    }
+
+    /* ── Search ────────────────────────────────────────────── */
+    #search-wrap {
+      position: fixed;
+      top: 12px;
+      right: 285px;
+      z-index: 30;
+      width: 210px;
+      transition: right 0.28s ease;
+    }
+    #search-input {
+      width: 100%;
+      background: #0f1e33;
+      border: 1px solid #1e3a5f;
+      color: #e0e0e0;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none;
+    }
+    #search-input:focus { border-color: #3b82f6; }
+    #search-input::placeholder { color: #2d3748; }
+    #search-drop {
+      display: none;
+      background: #0b1422;
+      border: 1px solid #1e3a5f;
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      max-height: 220px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #1e3a5f transparent;
+    }
+    #search-drop.open { display: block; }
+    .sr-item {
+      padding: 5px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      color: #94a3b8;
+      line-height: 1.3;
+    }
+    .sr-item:hover, .sr-item.active { background: #162844; color: #e2e8f0; }
+    .sr-region { display: block; font-size: 9.5px; color: #374151; }
+    #path-info {
+      display: none;
+      margin-top: 5px;
+      font-size: 10px;
+      color: #4a5568;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    #path-info.visible { display: block; }
+
+    /* ── Help button ───────────────────────────────────────── */
+    #help-btn {
+      position: fixed;
+      bottom: 14px;
+      right: 14px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #0f1e33;
+      border: 1px solid #1e3a5f;
+      color: #4a5568;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 25;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+      user-select: none;
+    }
+    #help-btn:hover { background: #162844; border-color: #3b82f6; color: #94a3b8; }
+
+    /* ── Help modal ────────────────────────────────────────── */
+    #help-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #help-overlay.open { display: flex; }
+
+    #help-modal {
+      background: #0b1422;
+      border: 1px solid #1a2d42;
+      border-radius: 10px;
+      width: min(560px, 90vw);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #help-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid #1a2d42;
+      flex-shrink: 0;
+    }
+    #help-modal-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e2e8f0;
+      letter-spacing: 0.02em;
+    }
+    #help-close {
+      background: none;
+      border: none;
+      color: #4a5568;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 4px;
+    }
+    #help-close:hover { color: #94a3b8; }
+    #help-modal-body {
+      overflow-y: auto;
+      padding: 16px 18px 18px;
+      scrollbar-width: thin;
+      scrollbar-color: #1e3a5f transparent;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #94a3b8;
+    }
+    #help-modal-body::-webkit-scrollbar { width: 4px; }
+    #help-modal-body::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 2px; }
+
+    .help-section { margin-bottom: 16px; }
+    .help-section:last-child { margin-bottom: 0; }
+    .help-section h3 {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #374151;
+      margin-bottom: 7px;
+    }
+    .help-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 5px;
+      align-items: baseline;
+    }
+    .help-key {
+      flex-shrink: 0;
+      width: 170px;
+      color: #e2e8f0;
+      font-size: 11.5px;
+    }
+    .help-key kbd {
+      display: inline-block;
+      background: #0f1e33;
+      border: 1px solid #1e3a5f;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-family: inherit;
+      color: #94a3b8;
+      vertical-align: baseline;
+    }
+    .help-desc { color: #4a5568; font-size: 11px; }
+
+    /* ── Custom context menu ──────────────────────────────────── */
+    #ctx-menu {
+      position: fixed;
+      background: #0b1422;
+      border: 1px solid #1a2d42;
+      border-radius: 6px;
+      padding: 4px 0;
+      z-index: 200;
+      min-width: 185px;
+      display: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    #ctx-menu.open { display: block; }
+    .ctx-item {
+      padding: 7px 14px;
+      font-size: 12px;
+      color: #94a3b8;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ctx-item:hover { background: #162844; color: #e2e8f0; }
+    .ctx-sep { border-top: 1px solid #1a2d42; margin: 3px 0; }
+
+    /* ── Report modal ─────────────────────────────────────────── */
+    #report-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 110;
+      align-items: center;
+      justify-content: center;
+    }
+    #report-overlay.open { display: flex; }
+    #report-modal {
+      background: #0b1422;
+      border: 1px solid #1a2d42;
+      border-radius: 10px;
+      width: min(500px, 90vw);
+      display: flex;
+      flex-direction: column;
+    }
+    #report-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid #1a2d42;
+      flex-shrink: 0;
+    }
+    #report-modal-header h2 { font-size: 14px; font-weight: 600; color: #e2e8f0; letter-spacing: 0.02em; }
+    #report-close-btn { background: none; border: none; color: #4a5568; font-size: 18px; cursor: pointer; line-height: 1; padding: 2px 4px; }
+    #report-close-btn:hover { color: #94a3b8; }
+    #report-modal-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+    #report-item-name { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+    .report-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #374151; margin-bottom: 3px; }
+    #report-current-rule {
+      background: #0f1e33;
+      border: 1px solid #1e3a5f;
+      border-radius: 4px;
+      padding: 7px 10px;
+      font-size: 11.5px;
+      color: #4b5563;
+      line-height: 1.5;
+    }
+    #report-textarea {
+      width: 100%;
+      background: #0f1e33;
+      border: 1px solid #1e3a5f;
+      border-radius: 4px;
+      padding: 7px 10px;
+      color: #e0e0e0;
+      font-size: 12px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 80px;
+      outline: none;
+    }
+    #report-textarea:focus { border-color: #3b82f6; }
+    #report-textarea::placeholder { color: #2d3748; }
+    #report-modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 18px 14px;
+      border-top: 1px solid #1a2d42;
+    }
+    #report-error { flex: 1; font-size: 11px; color: #f87171; display: none; }
+    #report-error.visible { display: block; }
+    .report-btn { padding: 6px 16px; border-radius: 5px; font-size: 12px; cursor: pointer; border: 1px solid; }
+    #report-cancel-btn { background: transparent; border-color: #1e3a5f; color: #4a5568; }
+    #report-cancel-btn:hover { color: #94a3b8; border-color: #3b82f6; }
+    #report-submit-btn { background: #1e3a5f; border-color: #3b82f6; color: #93c5fd; }
+    #report-submit-btn:hover { background: #1d4ed8; color: #e0e0e0; }
+  </style>
+</head>
+<body>
+
+<div id="status" class="status-disconnected">Disconnected</div>
+<label id="color-toggle">
+  <input type="checkbox" id="color-check"> Color by accessibility
+</label>
+<div id="counters">
+  <div id="cnt-nodes">Regions: 0</div>
+  <div id="cnt-edges">Connections: 0</div>
+</div>
+<div id="tooltip"></div>
+<div id="empty-msg">
+  No regions visited yet
+  <span>Loading zones will appear as you explore</span>
+</div>
+
+<svg id="graph"></svg>
+
+<button id="help-btn" title="Help">?</button>
+
+<div id="help-overlay">
+  <div id="help-modal">
+    <div id="help-modal-header">
+      <h2>How to Use the Tracker</h2>
+      <button id="help-close" title="Close">×</button>
+    </div>
+    <div id="help-modal-body">
+
+      <div class="help-section">
+        <h3>Graph</h3>
+        <div class="help-row">
+          <span class="help-key">Scroll</span>
+          <span class="help-desc">Zoom in / out</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Drag background</span>
+          <span class="help-desc">Pan the graph</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Drag a node</span>
+          <span class="help-desc">Reposition a region node</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Hover a connection</span>
+          <span class="help-desc">Show the loading zone names on each end</span>
+        </div>
+      </div>
+
+      <div class="help-section">
+        <h3>Color Mode</h3>
+        <div class="help-row">
+          <span class="help-key">Toggle top-left checkbox</span>
+          <span class="help-desc">Color-codes region nodes by accessibility</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key" style="color:#22c55e">Green node</span>
+          <span class="help-desc">Has at least one reachable, incomplete item</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key" style="color:#ef4444">Red node</span>
+          <span class="help-desc">All items are currently blocked</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key" style="color:#374151">Gray node</span>
+          <span class="help-desc">All items are done</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key" style="color:#f59e0b">Amber outline</span>
+          <span class="help-desc">Your current region</span>
+        </div>
+      </div>
+
+      <div class="help-section">
+        <h3>Sidebar</h3>
+        <div class="help-row">
+          <span class="help-key">◀ / ▶ tab (right edge)</span>
+          <span class="help-desc">Show or hide the sidebar panel</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Left-click an item</span>
+          <span class="help-desc">Expand / collapse the access rule explanation</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Right-click any item</span>
+          <span class="help-desc">Opens a small menu with context actions.</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Toggle Done (locations)</span>
+          <span class="help-desc">Grays out the location the same as a server-confirmed pickup. Works in both directions — also un-grays AP-confirmed locations.</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Suggest Rule Change</span>
+          <span class="help-desc">Opens a text box showing the current rule. Type what you think the rule should be. All suggestions are saved to a .txt file — close the tracker by pressing <kbd>Ctrl+C</kbd> in the console window to generate it.</span>
+        </div>
+      </div>
+
+      <div class="help-section">
+        <h3>Search</h3>
+        <div class="help-row">
+          <span class="help-key">Type in search box</span>
+          <span class="help-desc">Find any location or zone by name</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key">Select a result</span>
+          <span class="help-desc">Highlights the shortest path from your current region (or Rogueport Center as fallback) on the graph in purple, with the target node in amber</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key"><kbd>↑</kbd> <kbd>↓</kbd> in search</span>
+          <span class="help-desc">Navigate the suggestion dropdown</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key"><kbd>Enter</kbd></span>
+          <span class="help-desc">Select the highlighted suggestion</span>
+        </div>
+        <div class="help-row">
+          <span class="help-key"><kbd>Esc</kbd></span>
+          <span class="help-desc">Clear search and remove path highlight</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div id="sidebar">
+  <button id="sidebar-toggle" title="Toggle sidebar">▶</button>
+  <div class="sb-header">
+    <div class="sb-region-name" id="sb-region">—</div>
+    <div class="sb-subtitle">Current Region</div>
+  </div>
+  <div class="sb-body" id="sb-body">
+    <div class="sb-empty">Enter a loading zone to see details</div>
+  </div>
+</div>
+
+<div id="search-wrap">
+  <input id="search-input" type="text" placeholder="Search locations &amp; zones…" autocomplete="off">
+  <div id="search-drop"></div>
+  <div id="path-info"></div>
+</div>
+
+<div id="ctx-menu">
+  <div class="ctx-item" id="ctx-toggle-done">Toggle Done</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" id="ctx-suggest">Suggest Rule Change</div>
+</div>
+
+<div id="report-overlay">
+  <div id="report-modal">
+    <div id="report-modal-header">
+      <h2>Suggest Rule Change</h2>
+      <button id="report-close-btn" title="Close">×</button>
+    </div>
+    <div id="report-modal-body">
+      <div id="report-item-name"></div>
+      <div>
+        <div class="report-label">Current Rule</div>
+        <div id="report-current-rule"></div>
+      </div>
+      <div>
+        <div class="report-label">Your Suggestion</div>
+        <textarea id="report-textarea" placeholder="Describe what the rule should be, or why the current rule is wrong…"></textarea>
+      </div>
+    </div>
+    <div id="report-modal-footer">
+      <div id="report-error"></div>
+      <button class="report-btn" id="report-cancel-btn">Cancel</button>
+      <button class="report-btn" id="report-submit-btn">Submit</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+  // ── Constants ──────────────────────────────────────────────
+  const WS_URL = 'ws://localhost:8765';
+  const NODE_R = 26;
+  const LINE_H = 12;
+
+  // ── State ──────────────────────────────────────────────────
+  let nodes         = [];
+  let edges         = [];
+  let currentRegion = null;
+  let nodeSidebars  = {};   // region → {zones, locs}
+
+  let hlNodes  = new Set();  // region ids in current path highlight
+  let hlEdges  = [];         // edge data objects in current path highlight
+  let hlTarget = null;       // target region id
+
+  let sidebarCollapsed = localStorage.getItem('ttyd_sidebar_collapsed') === '1';
+  let manuallyDone = new Set();
+
+  // ── Region merge map ───────────────────────────────────────
+  // Sub-regions that share a single room are collapsed into one graph node.
+  // Each entry: [canonicalName, ...subRegionsThatMergeIntoIt]
+  const REGION_GROUPS = [
+    ["Rogueport West",                       "Rogueport West Tall Pipe"],
+    ["Rogueport Blimp",                      "Rogueport Blimp Pipe Area"],
+    ["Rogueport Sewers East",                "Rogueport Sewers East Bobbery Pipe",
+                                              "Rogueport Sewers East Fortune Pipe",
+                                              "Rogueport Sewers East Plane Mode",
+                                              "Rogueport Sewers East Top"],
+    ["Rogueport Sewers Blooper",             "Rogueport Sewers Blooper Pipe",
+                                              "Rogueport Sewers Blooper House"],
+    ["Rogueport Sewers Town",                "Rogueport Sewers Town Dazzle",
+                                              "Rogueport Sewers Town Teleporter"],
+    ["Rogueport Sewers West",                "Rogueport Sewers West West",
+                                              "Rogueport Sewers West Bottom",
+                                              "Rogueport Sewers West Fahr"],
+    ["Rogueport Sewers East Enemy Hall",     "Rogueport Sewers East Enemy Hall Barred Door"],
+    ["Rogueport Sewers West Enemy Hall",     "Rogueport Sewers West Enemy Hall Flurrie"],
+    ["Rogueport Sewers West Warp Room",      "Rogueport Sewers West Warp Room Left",
+                                              "Rogueport Sewers West Warp Room Right",
+                                              "Rogueport Sewers West Warp Room Top"],
+    ["Rogueport Sewers East Warp Room",      "Rogueport Sewers East Warp Room Left",
+                                              "Rogueport Sewers East Warp Room Right",
+                                              "Rogueport Sewers East Warp Room Top"],
+    ["Rogueport Sewers Black Key Room",      "Rogueport Sewers Black Key Room Puni Door"],
+    ["Rogueport Sewers Puni Room",           "Rogueport Sewers Puni Room Exit"],
+    ["Petal Meadows Bridge",                 "Petal Meadows Bridge West",
+                                              "Petal Meadows Bridge East"],
+    ["Hooktail's Castle Drawbridge",         "Hooktail's Castle Drawbridge East Bottom",
+                                              "Hooktail's Castle Drawbridge East Top",
+                                              "Hooktail's Castle Drawbridge West Bottom",
+                                              "Hooktail's Castle Drawbridge West Top"],
+    ["Hooktail's Castle Stair Switch Room",  "Hooktail's Castle Stair Switch Room Upper Level"],
+    ["Hooktail's Castle Life Shroom Room",   "Hooktail's Castle Life Shroom Room Upper Level"],
+    ["Hooktail's Castle Central Staircase",  "Hooktail's Castle Central Staircase Upper Level"],
+    ["Boggly Woods Plane Panel Room",        "Boggly Woods Plane Panel Room Upper"],
+    ["Boggly Woods Outside Flurrie's House", "Boggly Woods Outside Flurrie's House Grass Area"],
+    ["Great Tree 100-Puni Pedestal",         "Great Tree 100-Puni Pedestal Upper",
+                                              "Great Tree 100-Puni Pedestal Lower"],
+    ["Glitzville Promoter's Office",         "Glitzville Promoter's Office Vent"],
+    ["Twilight Trail Dark Woods First Room", "Twilight Trail Dark Woods First Room North",
+                                              "Twilight Trail Dark Woods First Room South"],
+    ["Creepy Steeple Main Hall",             "Creepy Steeple Main Hall Upper",
+                                              "Creepy Steeple Main Hall Upper South"],
+    ["Creepy Steeple Well Buzzy Room",       "Creepy Steeple Well Buzzy Room Vivian"],
+    ["Pirate's Grotto Handle Room",          "Pirate's Grotto Handle Room Canal"],
+    ["Pirate's Grotto Sluice Gate",          "Pirate's Grotto Sluice Gate Upper",
+                                              "Pirate's Grotto Sluice Gate Upper Canal",
+                                              "Pirate's Grotto Sluice Gate Canal"],
+    ["Pirate's Grotto Toad Boat Room",       "Pirate's Grotto Toad Boat Room East"],
+    ["Riverside Station Ultra Boots Room",   "Riverside Station Ultra Boots Room Upper"],
+    ["Excess Express Storage Car",           "Excess Express Storage Car West"],
+    ["X-Naut Fortress Hall",                 "X-Naut Fortress Hall Ground Floor",
+                                              "X-Naut Fortress Hall Sublevel One",
+                                              "X-Naut Fortress Hall Sublevel Two",
+                                              "X-Naut Fortress Hall Sublevel Three",
+                                              "X-Naut Fortress Hall Sublevel Four"],
+    ["Palace of Shadow Far Hallway One",     "Palace of Shadow Far Hallway One Post Riddle Tower"],
+    ["Palace of Shadow Far Hallway 2",       "Palace of Shadow Far Hallway 2 Post Riddle"],
+    ["Palace of Shadow Far Hallway 3",       "Palace of Shadow Far Hallway 3 Post Riddle"],
+    ["Palace of Shadow Far Hallway 4",       "Palace of Shadow Far Hallway 4 Post Riddle"],
+    ["Palace of Shadow Far Backroom 2",      "Palace of Shadow Far Backroom 2 Top"],
+  ];
+
+  const REGION_MERGE = {};
+  for (const [canonical, ...subs] of REGION_GROUPS) {
+    for (const sub of subs) REGION_MERGE[sub] = canonical;
+  }
+
+  function canonicalize(name) { return REGION_MERGE[name] || name; }
+
+  function mergeSidebar(canonical, newSb) {
+    if (!nodeSidebars[canonical]) nodeSidebars[canonical] = { zones: [], locs: [] };
+    const sb = nodeSidebars[canonical];
+    for (const z of (newSb.zones || [])) {
+      const i = sb.zones.findIndex(x => x.name === z.name);
+      if (i >= 0) sb.zones[i] = z; else sb.zones.push(z);
+    }
+    for (const l of (newSb.locs || [])) {
+      const i = sb.locs.findIndex(x => x.name === l.name);
+      if (i >= 0) sb.locs[i] = l; else sb.locs.push(l);
+    }
+  }
+
+  // ── SVG / zoom ─────────────────────────────────────────────
+  const svg = d3.select('#graph');
+  const W   = () => window.innerWidth;
+  const H   = () => window.innerHeight;
+  const g   = svg.append('g');
+
+  svg.call(d3.zoom().scaleExtent([0.08, 5]).on('zoom', e => g.attr('transform', e.transform)));
+
+  const linkG = g.append('g');
+  const nodeG = g.append('g');
+
+  // ── Force simulation ───────────────────────────────────────
+  const sim = d3.forceSimulation([])
+    .force('link',      d3.forceLink([]).id(d => d.id).distance(160).strength(0.5))
+    .force('charge',    d3.forceManyBody().strength(-700))
+    .force('center',    d3.forceCenter(W() / 2, H() / 2))
+    .force('collision', d3.forceCollide(NODE_R + 22));
+
+  let linkSel = linkG.selectAll('line');
+  let nodeSel = nodeG.selectAll('g.node');
+
+  // ── Text wrapping ──────────────────────────────────────────
+  function wrapLines(name) {
+    const words = name.split(' ');
+    if (words.length <= 2) return words;
+    const mid = Math.ceil(words.length / 2);
+    return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+  }
+
+  // ── Graph update ───────────────────────────────────────────
+  function updateGraph() {
+    document.getElementById('empty-msg').style.display = nodes.length === 0 ? 'block' : 'none';
+    document.getElementById('cnt-nodes').textContent = `Regions: ${nodes.length}`;
+    document.getElementById('cnt-edges').textContent = `Connections: ${edges.length}`;
+
+    // Links
+    linkSel = linkG.selectAll('line.link').data(edges, d => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source;
+      const t = typeof d.target === 'object' ? d.target.id : d.target;
+      return s < t ? `${s}|${t}` : `${t}|${s}`;
+    });
+    linkSel.exit().transition().duration(300).attr('stroke-opacity', 0).remove();
+    const linkEnter = linkSel.enter().append('line').attr('class', 'link')
+      .attr('stroke-opacity', 0)
+      .on('mouseover', (ev, d) => {
+        const s = typeof d.source === 'object' ? d.source.id : d.source;
+        const t = typeof d.target === 'object' ? d.target.id : d.target;
+        const line2 = [d.src_zone, d.dst_zone].filter(Boolean).join('  ↔  ') || d.zone;
+        showTip(ev, `${s}  ↔  ${t}`, line2);
+      })
+      .on('mousemove', moveTip).on('mouseout', hideTip);
+    linkEnter.transition().duration(500).attr('stroke-opacity', 1);
+    linkSel = linkEnter.merge(linkSel);
+
+    // Nodes
+    nodeSel = nodeG.selectAll('g.node').data(nodes, d => d.id);
+    nodeSel.exit().transition().duration(300).attr('opacity', 0).remove();
+
+    const nodeEnter = nodeSel.enter().append('g').attr('class', 'node').attr('opacity', 0)
+      .call(d3.drag()
+        .on('start', (ev, d) => { if (!ev.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+        .on('drag',  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+        .on('end',   (ev)    => { if (!ev.active) sim.alphaTarget(0); })
+      );
+
+    nodeEnter.append('circle').attr('class', 'node-circle').attr('r', 0)
+      .on('mouseover', (ev, d) => showTip(ev, d.id))
+      .on('mousemove', moveTip).on('mouseout', hideTip)
+      .transition().duration(500).attr('r', NODE_R);
+
+    nodeEnter.each(function(d) {
+      const grp = d3.select(this);
+      const lines = wrapLines(d.id);
+      const startY = -(lines.length - 1) * LINE_H / 2;
+      lines.forEach((line, i) => {
+        grp.append('text').attr('class', 'node-label')
+          .attr('y', startY + i * LINE_H).attr('opacity', 0).text(line)
+          .transition().duration(600).attr('opacity', 1);
+      });
+    });
+
+    nodeEnter.transition().duration(400).attr('opacity', 1);
+    nodeSel = nodeEnter.merge(nodeSel);
+
+    refreshNodeColors();
+
+    sim.nodes(nodes);
+    sim.force('link').links(edges);
+    sim.alpha(0.3).restart();
+  }
+
+  // ── Node coloring ──────────────────────────────────────────
+  function nodeStatus(id) {
+    const sb = nodeSidebars[id];
+    if (!sb) return null;
+    const items = [
+      ...(sb.zones || []).map(z => ({ done: z.visited,                             can: z.reachable })),
+      ...(sb.locs  || []).map(l => ({ done: l.checked !== manuallyDone.has(l.name), can: l.reachable })),
+    ];
+    if (!items.length) return null;
+    if (items.every(x => x.done))            return 'complete';
+    if (items.some(x => !x.done && x.can))   return 'accessible';
+    return 'inaccessible';
+  }
+
+  function refreshNodeColors() {
+    const colored = document.getElementById('color-check').checked;
+    nodeSel.select('circle').each(function(d) {
+      const isCurrent = d.id === currentRegion;
+      const status    = colored ? nodeStatus(d.id) : null;
+      d3.select(this)
+        .classed('current',              isCurrent)
+        .classed('status-accessible',    !isCurrent && status === 'accessible')
+        .classed('status-inaccessible',  !isCurrent && status === 'inaccessible')
+        .classed('status-complete',      !isCurrent && status === 'complete');
+    });
+    nodeSel.selectAll('text.node-label').classed('current', d => d.id === currentRegion);
+    reapplyHighlight();
+  }
+
+  document.getElementById('color-check').addEventListener('change', refreshNodeColors);
+
+  sim.on('tick', () => {
+    linkSel.attr('x1', d => d.source.x ?? 0).attr('y1', d => d.source.y ?? 0)
+           .attr('x2', d => d.target.x ?? 0).attr('y2', d => d.target.y ?? 0);
+    nodeSel.attr('transform', d => `translate(${d.x ?? 0},${d.y ?? 0})`);
+  });
+
+  // ── Path highlighting ──────────────────────────────────────
+  function reapplyHighlight() {
+    nodeSel.select('circle')
+      .classed('path-highlight', d => d.id !== hlTarget && hlNodes.has(d.id))
+      .classed('path-target',    d => d.id === hlTarget);
+    linkSel.classed('path-highlight', d => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source;
+      const t = typeof d.target === 'object' ? d.target.id : d.target;
+      return hlEdges.some(e => {
+        const es = typeof e.source === 'object' ? e.source.id : e.source;
+        const et = typeof e.target === 'object' ? e.target.id : e.target;
+        return (es === s && et === t) || (es === t && et === s);
+      });
+    });
+  }
+
+  function clearHighlight() {
+    hlNodes = new Set(); hlEdges = []; hlTarget = null;
+    reapplyHighlight();
+    document.getElementById('path-info').classList.remove('visible');
+  }
+
+  function findPathBFS(startId, targetId) {
+    if (startId === targetId) return { nodePath: [startId], edgePath: [] };
+    const adj = {};
+    for (const n of nodes) adj[n.id] = [];
+    for (const edge of edges) {
+      const s = typeof edge.source === 'object' ? edge.source.id : edge.source;
+      const t = typeof edge.target === 'object' ? edge.target.id : edge.target;
+      if (!adj[s]) adj[s] = [];
+      if (!adj[t]) adj[t] = [];
+      adj[s].push({ n: t, e: edge });
+      adj[t].push({ n: s, e: edge });
+    }
+    const seen = new Set([startId]);
+    const queue = [{ id: startId, nPath: [startId], ePath: [] }];
+    while (queue.length) {
+      const { id, nPath, ePath } = queue.shift();
+      for (const { n, e } of (adj[id] || [])) {
+        if (!seen.has(n)) {
+          seen.add(n);
+          const nn = [...nPath, n], ne = [...ePath, e];
+          if (n === targetId) return { nodePath: nn, edgePath: ne };
+          queue.push({ id: n, nPath: nn, ePath: ne });
+        }
+      }
+    }
+    return null;
+  }
+
+  // ── Search ─────────────────────────────────────────────────
+  const searchInput = document.getElementById('search-input');
+  const searchDrop  = document.getElementById('search-drop');
+  const pathInfoEl  = document.getElementById('path-info');
+  let activeIdx = -1;
+  let dropItems = [];
+
+  function getSearchResults(q) {
+    if (!q) return [];
+    const ql = q.toLowerCase();
+    const out = [];
+    for (const [region, sb] of Object.entries(nodeSidebars)) {
+      for (const z of (sb.zones || [])) if (z.name.toLowerCase().includes(ql)) out.push({ name: z.name, region, type: 'zone' });
+      for (const l of (sb.locs  || [])) if (l.name.toLowerCase().includes(ql)) out.push({ name: l.name, region, type: 'loc'  });
+    }
+    return out.slice(0, 14);
+  }
+
+  function renderDrop(items) {
+    dropItems = items; activeIdx = -1;
+    if (!items.length) { searchDrop.classList.remove('open'); return; }
+    searchDrop.innerHTML = items.map((it, i) =>
+      `<div class="sr-item" data-i="${i}">${esc(it.name)}<span class="sr-region">${esc(it.region)}</span></div>`
+    ).join('');
+    searchDrop.classList.add('open');
+    searchDrop.querySelectorAll('.sr-item').forEach(el =>
+      el.addEventListener('mousedown', ev => { ev.preventDefault(); selectSearchItem(+el.dataset.i); })
+    );
+  }
+
+  function selectSearchItem(idx) {
+    const item = dropItems[idx];
+    if (!item) return;
+    searchInput.value = item.name;
+    searchDrop.classList.remove('open');
+    runSearch(item);
+  }
+
+  function runSearch(item) {
+    clearHighlight();
+    const target = item.region;
+    if (!nodes.some(n => n.id === target)) return;
+
+    const start = (currentRegion && nodes.some(n => n.id === currentRegion)) ? currentRegion : null;
+    let result = start ? findPathBFS(start, target) : null;
+    let usedFallback = false;
+    const FALLBACK = 'Rogueport Center';
+
+    if (!result && start !== FALLBACK && nodes.some(n => n.id === FALLBACK)) {
+      result = findPathBFS(FALLBACK, target);
+      usedFallback = result !== null;
+    }
+
+    hlTarget = target;
+    if (result) {
+      result.nodePath.forEach(id => hlNodes.add(id));
+      hlEdges = result.edgePath;
+      const from   = usedFallback ? FALLBACK : start;
+      const hops   = result.nodePath.length - 1;
+      const arrow  = result.nodePath.map(esc).join(' <span style="color:#374151">→</span> ');
+      pathInfoEl.innerHTML =
+        (usedFallback ? `<span style="color:#f87171">Not reachable from current — routing from Rogueport Center</span><br>` : '') +
+        `<span style="color:#a855f7">${arrow}</span><br><span style="color:#374151">${hops} hop${hops !== 1 ? 's' : ''}</span>`;
+    } else {
+      pathInfoEl.innerHTML = `<span style="color:#f87171">No path found to ${esc(target)}</span>`;
+    }
+    pathInfoEl.classList.add('visible');
+    reapplyHighlight();
+  }
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim();
+    if (!q) { clearHighlight(); renderDrop([]); return; }
+    renderDrop(getSearchResults(q));
+  });
+
+  searchInput.addEventListener('keydown', ev => {
+    const items = searchDrop.querySelectorAll('.sr-item');
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      activeIdx = Math.min(activeIdx + 1, dropItems.length - 1);
+      items.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      activeIdx = Math.max(activeIdx - 1, 0);
+      items.forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+    } else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      selectSearchItem(activeIdx >= 0 ? activeIdx : 0);
+    } else if (ev.key === 'Escape') {
+      searchDrop.classList.remove('open');
+      clearHighlight();
+      searchInput.value = '';
+    }
+  });
+
+  searchInput.addEventListener('blur', () => {
+    setTimeout(() => searchDrop.classList.remove('open'), 150);
+  });
+
+  // ── Sidebar ────────────────────────────────────────────────
+  function esc(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  const EXPLAIN_COLORS = { green: '#4ade80', salmon: '#f87171', cyan: '#67e8f9', yellow: '#facc15' };
+
+  function renderExplain(parts) {
+    return (parts || []).map(p => {
+      const t = esc(p.text || '');
+      if (p.type === 'color') {
+        const c = EXPLAIN_COLORS[p.color] || p.color;
+        return `<span style="color:${c}">${t}</span>`;
+      }
+      return `<span>${t}</span>`;
+    }).join('');
+  }
+
+  function makeItem(name, dotCls, stateCls, explainParts, itemType) {
+    const explainHtml = renderExplain(explainParts);
+    return `<div class="sb-item ${stateCls}" onclick="this.classList.toggle('expanded')" data-item-name="${esc(name)}" data-item-type="${itemType}">
+      <div class="sb-item-header">
+        <div class="sb-dot ${dotCls}"></div>
+        <span>${esc(name)}</span>
+        <div class="sb-chevron">▼</div>
+      </div>
+      <div class="sb-explain">${explainHtml}</div>
+    </div>`;
+  }
+
+  function updateSidebar(region, sidebar) {
+    const panel  = document.getElementById('sidebar');
+    const nameEl = document.getElementById('sb-region');
+    const bodyEl = document.getElementById('sb-body');
+
+    if (!region || !sidebar) { panel.classList.remove('visible'); return; }
+    if (sidebarCollapsed) return;
+
+    nameEl.textContent = region;
+
+    const zones = sidebar.zones || [];
+    const locs  = sidebar.locs  || [];
+    let html = '';
+
+    if (zones.length > 0) {
+      html += '<div class="sb-section">Loading Zones</div>';
+      for (const z of zones) {
+        const dot = z.visited   ? 'dot-gray'  : z.reachable ? 'dot-green' : 'dot-red';
+        const cls = z.visited   ? 'visited'   : z.reachable ? 'reachable' : '';
+        html += makeItem(z.name, dot, cls, z.explain, 'zone');
+      }
+    }
+
+    if (locs.length > 0) {
+      html += '<div class="sb-section">Locations</div>';
+      for (const l of locs) {
+        const done = l.checked !== manuallyDone.has(l.name);
+        const dot  = done       ? 'dot-gray'  : l.reachable ? 'dot-green' : 'dot-red';
+        const cls  = done       ? 'checked'   : l.reachable ? 'reachable' : '';
+        html += makeItem(l.name, dot, cls, l.explain, 'loc');
+      }
+    }
+
+    if (!html) html = '<div class="sb-empty">No zones or locations found for this region</div>';
+    bodyEl.innerHTML = html;
+    panel.classList.add('visible');
+  }
+
+  // ── Message handling ───────────────────────────────────────
+  function addEdgeIfNew(s, t, zone, src_zone, dst_zone) {
+    if (s === t) return;
+    const exists = edges.some(e => {
+      const es = typeof e.source === 'object' ? e.source.id : e.source;
+      const et = typeof e.target === 'object' ? e.target.id : e.target;
+      return (es === s && et === t) || (es === t && et === s);
+    });
+    if (!exists) edges.push({ source: s, target: t, zone, src_zone, dst_zone });
+  }
+
+  function handleMessage(msg) {
+    if (msg.type === 'graph_state') {
+      // Build deduped canonical nodes
+      const seenN = new Set();
+      nodes = [];
+      for (const id of msg.nodes) {
+        const cid = canonicalize(id);
+        if (!seenN.has(cid)) { seenN.add(cid); nodes.push({ id: cid }); }
+      }
+      // Build deduped canonical edges, dropping self-loops
+      const seenE = new Set();
+      edges = [];
+      for (const e of msg.edges) {
+        const s = canonicalize(e.from), t = canonicalize(e.to);
+        if (s === t) continue;
+        const key = s < t ? `${s}|${t}` : `${t}|${s}`;
+        if (!seenE.has(key)) {
+          seenE.add(key);
+          edges.push({ source: s, target: t, zone: e.zone, src_zone: e.src_zone, dst_zone: e.dst_zone });
+        }
+      }
+      currentRegion = msg.current ? canonicalize(msg.current) : null;
+      nodeSidebars  = {};
+      for (const [raw, sb] of Object.entries(msg.node_sidebars || {})) {
+        mergeSidebar(canonicalize(raw), sb);
+      }
+      updateGraph();
+      updateSidebar(currentRegion, nodeSidebars[currentRegion]);
+
+    } else if (msg.type === 'sidebar_updates') {
+      for (const [raw, sb] of Object.entries(msg.updates)) {
+        mergeSidebar(canonicalize(raw), sb);
+      }
+      refreshNodeColors();
+      if (currentRegion) updateSidebar(currentRegion, nodeSidebars[currentRegion]);
+
+    } else if (msg.type === 'visit') {
+      currentRegion = canonicalize(msg.region);
+      for (const [raw, sb] of Object.entries(msg.node_sidebar_update || {})) {
+        mergeSidebar(canonicalize(raw), sb);
+      }
+      if (!nodes.some(n => n.id === currentRegion)) nodes.push({ id: currentRegion });
+      if (msg.edge) {
+        addEdgeIfNew(
+          canonicalize(msg.edge.from), canonicalize(msg.edge.to),
+          msg.edge.zone, msg.edge.src_zone, msg.edge.dst_zone
+        );
+      }
+      updateGraph();
+      updateSidebar(currentRegion, nodeSidebars[currentRegion]);
+    }
+  }
+
+  // ── Tooltip ────────────────────────────────────────────────
+  const tip = document.getElementById('tooltip');
+  function showTip(ev, ...lines) {
+    tip.innerHTML = lines.filter(Boolean).map(l => `<div>${l}</div>`).join('');
+    tip.style.opacity = '1';
+    moveTip(ev);
+  }
+  function moveTip(ev) { tip.style.left = (ev.clientX + 14) + 'px'; tip.style.top = (ev.clientY - 10) + 'px'; }
+  function hideTip()   { tip.style.opacity = '0'; }
+
+  // ── Sidebar collapse ───────────────────────────────────────
+  const sidebarToggleBtn = document.getElementById('sidebar-toggle');
+
+  function setSidebarCollapsed(v) {
+    sidebarCollapsed = v;
+    localStorage.setItem('ttyd_sidebar_collapsed', v ? '1' : '0');
+    sidebarToggleBtn.textContent = v ? '◀' : '▶';
+    document.getElementById('search-wrap').style.right = v ? '30px' : '285px';
+    if (v) {
+      document.getElementById('sidebar').classList.remove('visible');
+    } else if (currentRegion && nodeSidebars[currentRegion]) {
+      updateSidebar(currentRegion, nodeSidebars[currentRegion]);
+    }
+  }
+
+  sidebarToggleBtn.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
+
+  // Apply persisted collapsed state on load
+  if (sidebarCollapsed) {
+    sidebarToggleBtn.textContent = '◀';
+    document.getElementById('search-wrap').style.right = '30px';
+  }
+
+  // ── Manual location completion ──────────────────────────────
+  function toggleManualDone(name) {
+    if (manuallyDone.has(name)) manuallyDone.delete(name);
+    else                        manuallyDone.add(name);
+    if (currentRegion) updateSidebar(currentRegion, nodeSidebars[currentRegion]);
+    refreshNodeColors();
+  }
+
+  // ── Context menu ───────────────────────────────────────────
+  const ctxMenu         = document.getElementById('ctx-menu');
+  const ctxToggleDone   = document.getElementById('ctx-toggle-done');
+  const ctxSuggest      = document.getElementById('ctx-suggest');
+  let ctxTarget = null;
+
+  function showCtxMenu(e, name, itemType) {
+    ctxTarget = { name, itemType };
+    // Position: keep menu on-screen
+    const menuW = 185, menuH = 70;
+    const x = Math.min(e.clientX, window.innerWidth  - menuW - 4);
+    const y = Math.min(e.clientY, window.innerHeight - menuH - 4);
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top  = y + 'px';
+    ctxToggleDone.style.display = itemType === 'loc' ? 'block' : 'none';
+    document.querySelector('#ctx-menu .ctx-sep').style.display = itemType === 'loc' ? 'block' : 'none';
+    ctxMenu.classList.add('open');
+  }
+
+  function hideCtxMenu() { ctxMenu.classList.remove('open'); ctxTarget = null; }
+
+  document.getElementById('sb-body').addEventListener('contextmenu', e => {
+    e.preventDefault();
+    const item = e.target.closest('[data-item-name]');
+    if (!item) return;
+    showCtxMenu(e, item.dataset.itemName, item.dataset.itemType);
+  });
+
+  document.addEventListener('click', () => hideCtxMenu());
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCtxMenu(); });
+
+  ctxToggleDone.addEventListener('click', () => {
+    if (ctxTarget && ctxTarget.itemType === 'loc') toggleManualDone(ctxTarget.name);
+    hideCtxMenu();
+  });
+
+  ctxSuggest.addEventListener('click', () => {
+    if (ctxTarget) openReportModal(ctxTarget.name, ctxTarget.itemType);
+    hideCtxMenu();
+  });
+
+  // ── Report modal ───────────────────────────────────────────
+  const reportOverlay = document.getElementById('report-overlay');
+  let reportTarget = null;
+
+  function explainToText(parts) {
+    return (parts || []).map(p => p.text || '').join('').trim();
+  }
+
+  function getExplainForItem(name, itemType) {
+    if (!currentRegion) return [];
+    const sb = nodeSidebars[currentRegion];
+    if (!sb) return [];
+    if (itemType === 'zone') return (sb.zones || []).find(z => z.name === name)?.explain || [];
+    return (sb.locs || []).find(l => l.name === name)?.explain || [];
+  }
+
+  function openReportModal(name, itemType) {
+    const explain = getExplainForItem(name, itemType);
+    const currentRuleText = explainToText(explain);
+    reportTarget = { name, itemType, currentRuleText };
+
+    document.getElementById('report-item-name').textContent = name;
+    const ruleEl = document.getElementById('report-current-rule');
+    ruleEl.innerHTML = renderExplain(explain) || '<em style="color:#374151">No rule (always accessible)</em>';
+    document.getElementById('report-textarea').value = '';
+    document.getElementById('report-error').textContent = '';
+    document.getElementById('report-error').classList.remove('visible');
+    reportOverlay.classList.add('open');
+    setTimeout(() => document.getElementById('report-textarea').focus(), 50);
+  }
+
+  function closeReportModal() { reportOverlay.classList.remove('open'); reportTarget = null; }
+
+  document.getElementById('report-close-btn').addEventListener('click', closeReportModal);
+  document.getElementById('report-cancel-btn').addEventListener('click', closeReportModal);
+  reportOverlay.addEventListener('click', e => { if (e.target === reportOverlay) closeReportModal(); });
+
+  document.getElementById('report-submit-btn').addEventListener('click', () => {
+    if (!reportTarget) return;
+    const suggestion = document.getElementById('report-textarea').value.trim();
+    if (!suggestion) {
+      const errEl = document.getElementById('report-error');
+      errEl.textContent = 'Please enter a suggestion before submitting.';
+      errEl.classList.add('visible');
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      const errEl = document.getElementById('report-error');
+      errEl.textContent = 'Not connected to tracker server — cannot submit.';
+      errEl.classList.add('visible');
+      return;
+    }
+    ws.send(JSON.stringify({
+      type:         'report',
+      name:         reportTarget.name,
+      item_type:    reportTarget.itemType,
+      current_rule: reportTarget.currentRuleText,
+      suggestion,
+    }));
+    closeReportModal();
+  });
+
+  // ── Help modal ─────────────────────────────────────────────
+  const helpOverlay = document.getElementById('help-overlay');
+  document.getElementById('help-btn').addEventListener('click', () => helpOverlay.classList.add('open'));
+  document.getElementById('help-close').addEventListener('click', () => helpOverlay.classList.remove('open'));
+  helpOverlay.addEventListener('click', e => { if (e.target === helpOverlay) helpOverlay.classList.remove('open'); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') helpOverlay.classList.remove('open'); });
+
+  // ── WebSocket ──────────────────────────────────────────────
+  const statusEl = document.getElementById('status');
+  let reconnectDelay = 1000;
+  let ws = null;
+
+  function connect() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      statusEl.textContent = 'Connected';
+      statusEl.className   = 'status-connected';
+      reconnectDelay = 1000;
+    };
+    ws.onmessage = e => { try { handleMessage(JSON.parse(e.data)); } catch(err) { console.error(err); } };
+    ws.onclose   = () => {
+      statusEl.textContent = 'Disconnected — reconnecting…';
+      statusEl.className   = 'status-disconnected';
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  connect();
+
+  window.addEventListener('resize', () => {
+    sim.force('center', d3.forceCenter(W() / 2, H() / 2));
+    sim.alpha(0.1).restart();
+  });
+</script>
+</body>
+</html>
