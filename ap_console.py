@@ -130,6 +130,7 @@ async def _handle_loading_zone(
     locs: list | None = None,
     dst_zone: str | None = None,
     src_zone: str | None = None,
+    teleport: bool = False,
 ) -> None:
     global _prev_region
     if region == "Unknown":
@@ -152,7 +153,7 @@ async def _handle_loading_zone(
         _graph_nodes.append(region)
         update["new_node"] = True
 
-    if _prev_region and _prev_region != region:
+    if not teleport and _prev_region and _prev_region != region:
         edge_key = (min(_prev_region, region), max(_prev_region, region))
         if edge_key not in _edge_set:
             _edge_set.add(edge_key)
@@ -164,7 +165,7 @@ async def _handle_loading_zone(
             update["edge"] = edge
 
     # Mark the exit zone as visited in the departing region's sidebar
-    if _prev_region and src_zone and _prev_region in _node_sidebar:
+    if not teleport and _prev_region and src_zone and _prev_region in _node_sidebar:
         for z in _node_sidebar[_prev_region].get("zones", []):
             if z["name"] == src_zone and not z.get("visited"):
                 z["visited"] = True
@@ -300,6 +301,7 @@ async def run(host, port, slot, game, password):
                             region, f"{room}:{bero}",
                             data.get("zones"), data.get("locs"),
                             data.get("dst_zone"), data.get("src_zone"),
+                            data.get("teleport", False),
                         )
                     elif data.get("type") == "ttyd_sidebar_update":
                         updates = data.get("updates", {})
